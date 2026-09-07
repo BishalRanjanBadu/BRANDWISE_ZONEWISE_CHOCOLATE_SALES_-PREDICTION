@@ -1,0 +1,14 @@
+venv/
+runs/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.ipynb_checkpoints/
+*.xlsx
+*.pkl
+# NOTE: *.ipynb is deliberately NOT ignored - notebooks are the Phase-1 deliverable.
+# NOTE: tests/fixtures/*.csv is deliberately NOT ignored - CI runs on the fixture,
+#       which is why the test job needs no cloud credentials. A blanket *.csv rule
+#       here would silently break CI.
+data/*.csv

@@ -1,0 +1,17 @@
+notebooks/
+runs/
+tests/
+artifacts/
+_s3_local/
+venv/
+.git/
+.github/
+.env
+*.ipynb
+*.csv
+*.xlsx
+*.pkl
+__pycache__/
+*.pyc
+.pytest_cache/
+*.md

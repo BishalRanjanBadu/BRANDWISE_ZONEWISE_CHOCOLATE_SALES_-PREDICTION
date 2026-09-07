@@ -1,0 +1,5 @@
+# Test-only. CI installs BOTH this and requirements.txt - whatever the test job
+# imports must be in a file the job actually installs.
+-r requirements.txt
+pytest==9.1.1
+httpx==0.28.1

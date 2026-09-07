@@ -1,0 +1,219 @@
+name: MLOps Pipeline
+
+# CI DOES NOT BOOTSTRAP INFRASTRUCTURE.
+# The EKS cluster, the OIDC provider and the IRSA ServiceAccount are one-time
+# human steps (OPERATOR_RUNBOOK_PHASE2.md). This pipeline VERIFIES they exist
+# and fails with an actionable message; it never creates them.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Zero-config: every non-secret identifier is baked in with a concrete default,
+# so a fresh clone works without creating a single repository Variable.
+env:
+  AWS_REGION:     ${{ vars.AWS_REGION     || 'ap-south-2' }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID || '117211782845' }}
+  ECR_REPO:       ${{ vars.ECR_REPO       || 'brandwise-zonewise-chocolate-sales-prediction' }}
+  EKS_CLUSTER:    ${{ vars.EKS_CLUSTER    || 'chocolate-sales-eks' }}
+  K8S_NAMESPACE:  ${{ vars.K8S_NAMESPACE  || 'chocolate-prod' }}
+  SERVICE_ACCOUNT: ${{ vars.SERVICE_ACCOUNT || 'chocolate-sa' }}
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────
+  test:
+    name: Test (no cloud credentials)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        # requirements-dev.txt includes requirements.txt, so whatever the tests
+        # import is in the file this job actually installs.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Confirm the fixture is committed
+        run: |
+          test -f tests/fixtures/sample_panel.csv \
+            || { echo "FATAL: test fixture missing. Check .gitignore is not excluding it."; exit 1; }
+          wc -l tests/fixtures/sample_panel.csv
+
+      - name: Run tests with NO AWS credentials at all
+        # Unsetting these proves the suite cannot silently depend on S3. If a
+        # test needs data, the correct fix is the fixture, never credentials.
+        env:
+          AWS_ACCESS_KEY_ID: ""
+          AWS_SECRET_ACCESS_KEY: ""
+          AWS_SESSION_TOKEN: ""
+          S3_BUCKET: ""
+        run: pytest tests/ -v --tb=short
+
+      - name: Verify manifests parse and render
+        run: |
+          pip install pyyaml
+          IMAGE_TAG=ci-verify OUT=/tmp/render ./.github/scripts/render_and_verify.sh
+
+  # ────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build and push to ECR
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # Static keys in GitHub Secrets. OIDC is the upgrade - see the runbook.
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build and push (linux/arm64 - the t4g node is ARM)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Security scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        continue-on-error: true          # Trivy pulls its DB from ghcr.io, which rate-limits
+        with:
+          image-ref: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ steps.meta.outputs.tag }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true           # unpatchable base-image CVEs must not block forever
+          exit-code: "0"                 # REPORT, do not block. Change to "1" to enforce.
+          format: table
+
+  # ────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to EKS
+    needs: build
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'uat' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Pre-flight - infrastructure must already exist
+        run: |
+          set -euo pipefail
+          echo "::group::cluster"
+          aws eks describe-cluster --name "$EKS_CLUSTER" --region "$AWS_REGION" \
+            --query 'cluster.{status:status,version:version}' --output table
+          echo "::endgroup::"
+
+          aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION"
+
+          kubectl get namespace "$K8S_NAMESPACE" >/dev/null || {
+            echo "FATAL: namespace $K8S_NAMESPACE does not exist."
+            echo "Apply k8s/config.yml once from the runbook. CI does not create namespaces."
+            exit 1; }
+
+          kubectl get serviceaccount "$SERVICE_ACCOUNT" -n "$K8S_NAMESPACE" >/dev/null || {
+            echo "FATAL: ServiceAccount $SERVICE_ACCOUNT missing in $K8S_NAMESPACE."
+            echo "Create it with: eksctl create iamserviceaccount --cluster $EKS_CLUSTER ..."
+            echo "See OPERATOR_RUNBOOK_PHASE2.md step 8. CI does not create IRSA."
+            exit 1; }
+
+          echo "node capacity before deploy:"
+          kubectl describe node | grep -A8 "Allocated resources" || true
+
+      - name: Render and verify manifests
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+        run: |
+          pip install pyyaml
+          ./.github/scripts/render_and_verify.sh
+
+      - name: Apply
+        run: |
+          kubectl apply -f rendered/config.yml
+          kubectl apply -f rendered/deployment.yml
+          kubectl apply -f rendered/service.yml
+          kubectl apply -f rendered/pdb.yml
+
+      - name: Wait for rollout, and dump the real reason on failure
+        run: |
+          if ! kubectl rollout status deployment/chocolate-api -n "$K8S_NAMESPACE" --timeout=300s; then
+            echo "::group::pods";     kubectl get pods -n "$K8S_NAMESPACE" -o wide; echo "::endgroup::"
+            echo "::group::describe"; kubectl describe deployment/chocolate-api -n "$K8S_NAMESPACE"; echo "::endgroup::"
+            echo "::group::events";   kubectl get events -n "$K8S_NAMESPACE" --sort-by=.lastTimestamp | tail -30; echo "::endgroup::"
+            echo "::group::api log";  kubectl logs -n "$K8S_NAMESPACE" -l app=chocolate-api -c api --tail=100 || true; echo "::endgroup::"
+            echo "::group::ui log";   kubectl logs -n "$K8S_NAMESPACE" -l app=chocolate-api -c ui  --tail=50  || true; echo "::endgroup::"
+            exit 1
+          fi
+          kubectl get svc chocolate-svc -n "$K8S_NAMESPACE" -o wide
+
+  # ────────────────────────────────────────────────────────────────────────
+  post_deploy:
+    name: Golden-payload check against the live endpoint
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: { python-version: "3.13" }
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve the LoadBalancer and run the golden check
+        run: |
+          set -euo pipefail
+          pip install requests pandas
+          aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION"
+          HOST=$(kubectl get svc chocolate-svc -n "$K8S_NAMESPACE" \
+                 -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          [ -n "$HOST" ] || { echo "FATAL: LoadBalancer has no hostname yet"; exit 1; }
+          echo "endpoint: http://$HOST"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://$HOST/health" || true)
+            [ "$code" = "200" ] && break
+            echo "  health=$code, retry $i/30"; sleep 10
+          done
+          curl -sf "http://$HOST/health"
+          python scripts/golden_check.py --url "http://$HOST"

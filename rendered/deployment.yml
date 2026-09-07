@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chocolate-api
+  namespace: chocolate-prod
+  labels: { app: chocolate-api }
+spec:
+  # 1 replica: a single free-tier t4g.small cannot host two pods of this size.
+  # Canary is DEFERRED and documented - see k8s/deployment-canary.yml.disabled.
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels: { app: chocolate-api }
+  template:
+    metadata:
+      labels: { app: chocolate-api }
+    spec:
+      serviceAccountName: chocolate-sa      # created by eksctl, NOT defined here
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      terminationGracePeriodSeconds: 40
+      containers:
+        - name: api
+          image: 117211782845.dkr.ecr.ap-south-2.amazonaws.com/brandwise-zonewise-chocolate-sales-prediction:3025783
+          imagePullPolicy: IfNotPresent
+          command: ["./entrypoint.sh"]
+          env:
+            - name: ROLE
+              value: "api"
+          envFrom:
+            - configMapRef: { name: chocolate-config }
+          ports:
+            - { name: http, containerPort: 8000 }
+          # liveness: process only, no I/O. An S3 blip must not restart the pod.
+          livenessProbe:
+            httpGet: { path: /live, port: 8000 }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # readiness: artifact loaded AND manifest validated.
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # startup: sized for the cold S3 model load so a slow first start is
+          # not mistaken for a crash loop. 30 x 5s = 150s of grace.
+          startupProbe:
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            requests: { memory: "400Mi", cpu: "150m" }
+            limits:   { memory: "700Mi", cpu: "800m" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", "10"] }   # let in-flight requests drain
+        - name: ui
+          image: 117211782845.dkr.ecr.ap-south-2.amazonaws.com/brandwise-zonewise-chocolate-sales-prediction:3025783
+          imagePullPolicy: IfNotPresent
+          command: ["./entrypoint.sh"]
+          env:
+            - name: ROLE
+              value: "ui"
+          envFrom:
+            - configMapRef: { name: chocolate-config }
+          ports:
+            - { name: ui, containerPort: 8501 }
+          livenessProbe:
+            httpGet: { path: /_stcore/health, port: 8501 }
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /_stcore/health, port: 8501 }
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { memory: "250Mi", cpu: "100m" }
+            limits:   { memory: "450Mi", cpu: "500m" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp-ui, mountPath: /tmp }
+            - { name: streamlit, mountPath: /home/appuser/.streamlit }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: tmp-ui, emptyDir: {} }
+        - { name: streamlit, emptyDir: {} }

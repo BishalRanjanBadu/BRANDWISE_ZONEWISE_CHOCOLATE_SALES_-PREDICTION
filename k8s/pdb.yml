@@ -1,0 +1,11 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: chocolate-pdb
+  namespace: chocolate-prod
+spec:
+  # maxUnavailable rather than minAvailable: with replicas=1, minAvailable=1
+  # would block every voluntary eviction including node drains.
+  maxUnavailable: 1
+  selector:
+    matchLabels: { app: chocolate-api }

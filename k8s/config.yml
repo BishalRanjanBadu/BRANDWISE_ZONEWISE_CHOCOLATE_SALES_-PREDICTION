@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chocolate-prod
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chocolate-config
+  namespace: chocolate-prod
+data:
+  APP_ENV: "prod"
+  AWS_REGION: "ap-south-2"
+  S3_BUCKET: "brandwise-zonewise-chocolate-sales-prediction"
+  API_URL: "http://localhost:8000"
+  ALLOWED_ORIGINS: "http://localhost:8501"
+  # Strict library-version checking at model load. Leave true: it is the guard
+  # that stops a cross-version unpickle serving plausible-but-wrong numbers.
+  STRICT_LIB_CHECK: "true"
+  # Inference logging stays OFF until Phase 3 grants the serving role a scoped
+  # s3:PutObject on predictions/. Turning it on now yields AccessDenied per request.
+  LOG_PREDICTIONS: "false"
+# NOTE: there is deliberately no Secret here. Credentials resolve through IRSA.
+# Injecting AWS keys via a Kubernetes Secret defeats IRSA, puts a long-lived
+# credential in the cluster, and shadows the scoped role.

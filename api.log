@@ -1,0 +1,32 @@
+starting API on :8000
+INFO:     Started server process [16984]
+INFO:     Waiting for application startup.
+{"ts":"2026-09-07 10:38:07,651","level":"INFO","msg":Found credentials in shared credentials file: ~/.aws/credentials}
+{"ts":"2026-09-07 10:38:25,469","level":"INFO","msg":{"event": "model_loaded", "version": "v_20260907T050604Z_3025783", "features": 25, "estimator": "LGBMRegressor"}}
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:54875 - "GET /live HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54878 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54890 - "GET /v1/model HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62913 - "GET /health HTTP/1.1" 200 OK
+{"ts":"2026-09-07 10:38:41,243","level":"INFO","msg":{"event": "predict", "request_id": "b63c06b2-7918-4418-835c-013ffae14169", "source": "model", "model_version": "v_20260907T050604Z_3025783", "n_series": 90, "target_month": "2019-09-01"}}
+INFO:     127.0.0.1:62914 - "POST /v1/predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62916 - "POST /v1/predict HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:55217 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50095 - "GET /health HTTP/1.1" 200 OK
+{"ts":"2026-09-07 10:42:43,512","level":"INFO","msg":{"event": "predict", "request_id": "8d866c40-808c-4ec7-b52d-ada35ff8f7d9", "source": "model", "model_version": "v_20260907T050604Z_3025783", "n_series": 90, "target_month": "2019-09-01"}}
+INFO:     127.0.0.1:56352 - "POST /v1/predict?allow_fallback=false HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50784 - "GET /health HTTP/1.1" 200 OK
+{"ts":"2026-09-07 10:44:14,508","level":"INFO","msg":{"event": "predict", "request_id": "5b905f84-00e1-432f-bdc3-d0fb39ae8504", "source": "model", "model_version": "v_20260907T050604Z_3025783", "n_series": 90, "target_month": "2019-09-01"}}
+INFO:     127.0.0.1:58676 - "POST /v1/predict?allow_fallback=false HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61862 - "GET /health HTTP/1.1" 200 OK
+{"ts":"2026-09-07 10:49:29,302","level":"INFO","msg":{"event": "predict", "request_id": "3426ec3f-7f26-4312-bc52-46c87e047421", "source": "model", "model_version": "v_20260907T050604Z_3025783", "n_series": 90, "target_month": "2019-09-01"}}
+INFO:     127.0.0.1:55679 - "POST /v1/predict?allow_fallback=false HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51786 - "GET /health HTTP/1.1" 200 OK
+{"ts":"2026-09-07 12:05:08,476","level":"INFO","msg":{"event": "predict", "request_id": "40c45520-83d1-4416-9fee-2a144302234a", "source": "model", "model_version": "v_20260907T050604Z_3025783", "n_series": 90, "target_month": "2019-09-01"}}
+INFO:     127.0.0.1:51787 - "POST /v1/predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51788 - "POST /v1/predict HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60032 - "GET /health HTTP/1.1" 200 OK
+{"ts":"2026-09-07 12:41:47,658","level":"INFO","msg":{"event": "predict", "request_id": "7b166a87-d2f7-4ff6-a203-571492a991d3", "source": "model", "model_version": "v_20260907T050604Z_3025783", "n_series": 90, "target_month": "2019-09-01"}}
+INFO:     127.0.0.1:60034 - "POST /v1/predict HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60035 - "POST /v1/predict HTTP/1.1" 422 Unprocessable Entity
