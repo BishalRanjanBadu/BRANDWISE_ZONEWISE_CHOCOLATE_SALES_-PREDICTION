@@ -65,7 +65,10 @@ jobs:
       - name: Verify manifests parse and render
         run: |
           pip install pyyaml
-          IMAGE_TAG=ci-verify OUT=/tmp/render ./.github/scripts/render_and_verify.sh
+          # Invoked via `bash`, not `./`. A lost executable bit (Windows
+          # filesystems do not carry one, and git records 100644 unless told
+          # otherwise) would otherwise fail the job with exit 126.
+          IMAGE_TAG=ci-verify OUT=/tmp/render bash .github/scripts/render_and_verify.sh
 
   # ────────────────────────────────────────────────────────────────────────
   build:
@@ -164,7 +167,7 @@ jobs:
           IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
         run: |
           pip install pyyaml
-          ./.github/scripts/render_and_verify.sh
+          bash .github/scripts/render_and_verify.sh
 
       - name: Apply
         run: |
@@ -175,14 +178,33 @@ jobs:
 
       - name: Wait for rollout, and dump the real reason on failure
         run: |
-          if ! kubectl rollout status deployment/chocolate-api -n "$K8S_NAMESPACE" --timeout=300s; then
-            echo "::group::pods";     kubectl get pods -n "$K8S_NAMESPACE" -o wide; echo "::endgroup::"
-            echo "::group::describe"; kubectl describe deployment/chocolate-api -n "$K8S_NAMESPACE"; echo "::endgroup::"
-            echo "::group::events";   kubectl get events -n "$K8S_NAMESPACE" --sort-by=.lastTimestamp | tail -30; echo "::endgroup::"
-            echo "::group::api log";  kubectl logs -n "$K8S_NAMESPACE" -l app=chocolate-api -c api --tail=100 || true; echo "::endgroup::"
-            echo "::group::ui log";   kubectl logs -n "$K8S_NAMESPACE" -l app=chocolate-api -c ui  --tail=50  || true; echo "::endgroup::"
+          # NOTE: `shell: bash -e` aborts the step on the first non-zero command, and
+          # ::group:: folds output by default. A failed rollout previously produced five
+          # empty group headers and nothing else. `set +e` and plain echoes keep the
+          # diagnosis visible - a debug block that prints nothing is worse than none.
+          set +e
+          kubectl rollout status deployment/chocolate-api -n "$K8S_NAMESPACE" --timeout=300s
+          ROLLOUT_RC=$?
+          if [ "$ROLLOUT_RC" -ne 0 ]; then
+            echo "================ ROLLOUT FAILED (rc=$ROLLOUT_RC) ================"
+            echo "---------------- pods ----------------"
+            kubectl get pods -n "$K8S_NAMESPACE" -o wide
+            echo "---------------- pod events (why it is not scheduling) ----------------"
+            kubectl describe pod -n "$K8S_NAMESPACE" -l app=chocolate-api | sed -n '/Events:/,$p'
+            echo "---------------- node capacity ----------------"
+            kubectl describe node | sed -n '/Allocated resources/,/Events/p'
+            echo "---------------- namespace events ----------------"
+            kubectl get events -n "$K8S_NAMESPACE" --sort-by=.lastTimestamp | tail -30
+            echo "---------------- api container log ----------------"
+            kubectl logs -n "$K8S_NAMESPACE" -l app=chocolate-api -c api --tail=100
+            echo "---------------- ui container log ----------------"
+            kubectl logs -n "$K8S_NAMESPACE" -l app=chocolate-api -c ui --tail=50
+            echo "---------------- previous api log (if it restarted) ----------------"
+            kubectl logs -n "$K8S_NAMESPACE" -l app=chocolate-api -c api --tail=50 --previous
+            echo "================ END DIAGNOSIS ================"
             exit 1
           fi
+          set -e
           kubectl get svc chocolate-svc -n "$K8S_NAMESPACE" -o wide
 
   # ────────────────────────────────────────────────────────────────────────

@@ -10,7 +10,16 @@ spec:
   replicas: 1
   strategy:
     type: RollingUpdate
-    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+    # maxSurge:0 / maxUnavailable:1 - the OLD pod is terminated BEFORE the new one
+    # starts. On a single t4g.small there is not enough allocatable memory for two
+    # pods at once (~650Mi each against ~1.2Gi allocatable), so maxSurge:1 with
+    # maxUnavailable:0 deadlocks: the new pod stays Pending on insufficient memory
+    # while the old one refuses to terminate, and the rollout times out.
+    #
+    # The cost is a brief gap with no pod serving. That is inherent to one replica
+    # on one node. With >=2 replicas on a larger node pool, flip this back to
+    # maxSurge:1 / maxUnavailable:0 for a seamless rollout.
+    rollingUpdate: { maxSurge: 0, maxUnavailable: 1 }
   selector:
     matchLabels: { app: chocolate-api }
   template:
